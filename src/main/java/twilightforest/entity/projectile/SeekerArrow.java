@@ -1,20 +1,37 @@
 package twilightforest.entity.projectile;
 
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import javax.annotation.Nullable;
+
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
-import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.TamableAnimal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
+
 import twilightforest.init.TFEntities;
 
 import org.jetbrains.annotations.Nullable;
 import java.util.List;
 import java.util.stream.Collectors;
+
+
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.Cancelable;
+import net.minecraftforge.eventbus.api.Event;
+import twilightforest.entity.TFEntities;
 
 public class SeekerArrow extends TFArrow {
 
@@ -106,51 +123,64 @@ public class SeekerArrow extends TFArrow {
 
 			targetBB = targetBB.inflate(0, seekDistance * 0.5, 0);
 
-			double closestDot = -1.0;
-			Entity closestTarget = null;
 
-			List<LivingEntity> entityList = this.getLevel().getEntitiesOfClass(LivingEntity.class, targetBB);
+			List<LivingEntity> entityList = this.level.getEntitiesOfClass(LivingEntity.class, targetBB);
 			List<LivingEntity> monsters = entityList.stream().filter(l -> l instanceof Monster).collect(Collectors.toList());
 
 			if (!monsters.isEmpty()) {
 				for (LivingEntity monster : monsters) {
 					if (((Monster) monster).getTarget() == this.getOwner()) {
-						setTarget(monster);
-						return;
+						if (!ChangeTargetEvent.postOnChange(this, getTarget(), monster))
+						{
+							setTarget(monster);
+							return;
+						}
 					}
 				}
 				for (LivingEntity monster : monsters) {
 					if (monster instanceof NeutralMob) continue;
 
 					if (monster.hasLineOfSight(this)) {
-						setTarget(monster);
-						return;
+						if (!ChangeTargetEvent.postOnChange(this, getTarget(), monster))
+						{
+							setTarget(monster);
+							return;
+						}
 					}
 				}
 			}
 
-			for (LivingEntity living : entityList) {
+			Vec3 motionVec = getMotionVec().normalize();
+			
+			entityList = entityList.stream()
+			// Remove monsters as we already checked above
+			.filter(e -> !(e instanceof Monster))
+			// Primary checks
+			.filter(living -> {
+				if(!living.hasLineOfSight(this)) 
+					return false;
+				if (living == this.getOwner()) 
+					return false;
+				if (getOwner() != null && living instanceof TamableAnimal animal && animal.getOwner() == this.getOwner()) 
+					return false;
+				if (motionVec.dot(getVectorToTarget(living).normalize()) <= seekThreshold) 
+					return false;
+				return true;
+			})
+			// Sort by angle cosine, descending
+			.sorted(Comparator.comparingDouble((LivingEntity entity) -> 
+				motionVec.dot(getVectorToTarget(entity).normalize())
+			).reversed())
+			.collect(Collectors.toList());
 
-				if (!living.hasLineOfSight(this)) continue;
-
-				if (living == this.getOwner()) continue;
-
-				if (getOwner() != null && living instanceof TamableAnimal animal && animal.getOwner() == this.getOwner())
-					continue;
-
-				Vec3 motionVec = getMotionVec().normalize();
-				Vec3 targetVec = getVectorToTarget(living).normalize();
-
-				double dot = motionVec.dot(targetVec);
-
-				if (dot > Math.max(closestDot, seekThreshold)) {
-					closestDot = dot;
-					closestTarget = living;
+			// Find and set the first target that isn't canceled by event
+			for (int i = 0; i < entityList.size(); ++i)
+			{
+				if (!ChangeTargetEvent.postOnChange(this, getTarget(), entityList.get(i)))
+				{
+					setTarget(entityList.get(i));
+					break;
 				}
-			}
-
-			if (closestTarget != null) {
-				setTarget(closestTarget);
 			}
 		}
 	}
@@ -180,5 +210,46 @@ public class SeekerArrow extends TFArrow {
 	protected void onHitEntity(EntityHitResult result) {
 		this.setCritArrow(false);
 		super.onHitEntity(result);
+	}
+	
+	/**
+	 * Fired on seeker arrow changing target.
+	 * <p> If canceled, the seeker arrow will discard this target and seek for next one. 
+	 * Specially, if the new target is null, cancellation means the previous target won't be removed.
+	 */
+	@Cancelable
+	public static class ChangeTargetEvent extends Event
+	{
+		public final SeekerArrow arrow;
+		@Nullable
+		public final Entity oldTarget;
+		@Nullable
+		public final Entity newTarget;
+		protected ChangeTargetEvent(SeekerArrow arrow, @Nullable Entity oldTarget, @Nullable Entity newTarget)
+		{
+			this.arrow = arrow;
+			this.oldTarget = oldTarget;
+			this.newTarget = newTarget;
+		}
+		
+		/**
+		 * Post event on target changes.
+		 * @param arrow Seeker Arrow entity.
+		 * @param oldTarget Target before setting.
+		 * @param newTarget Target after setting.
+		 * @return Whether the event is canceled, or false if not posted.
+		 */
+		public static boolean postOnChange(SeekerArrow arrow, Entity oldTarget, Entity newTarget)
+		{
+			// Prevent from unexpectly posting on invalid entities
+			if (!oldTarget.isAlive())
+				oldTarget = null;
+			if (!newTarget.isAlive())
+				newTarget = null;
+			// Don't post if not changed
+			if (oldTarget == newTarget)
+				return false;
+			return MinecraftForge.EVENT_BUS.post(new ChangeTargetEvent(arrow, oldTarget, newTarget));
+		}
 	}
 }
