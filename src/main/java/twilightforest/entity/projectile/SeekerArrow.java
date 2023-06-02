@@ -20,18 +20,12 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
-
-import twilightforest.init.TFEntities;
-
-import org.jetbrains.annotations.Nullable;
-import java.util.List;
-import java.util.stream.Collectors;
-
-
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.Cancelable;
 import net.minecraftforge.eventbus.api.Event;
-import twilightforest.entity.TFEntities;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.sodiumstudio.befriendmobs.entity.IBefriendedMob;
+import twilightforest.init.TFEntities;
 
 public class SeekerArrow extends TFArrow {
 
@@ -250,6 +244,16 @@ public class SeekerArrow extends TFArrow {
 			if (oldTarget == newTarget)
 				return false;
 			return MinecraftForge.EVENT_BUS.post(new ChangeTargetEvent(arrow, oldTarget, newTarget));
+		}
+	}
+	
+	/** Test code below */
+	@SubscribeEvent
+	public static void onSeekerArrowChangeTarget(ChangeTargetEvent event)
+	{
+		if (event.newTarget instanceof IBefriendedMob bm)
+		{
+			event.setCanceled(true);
 		}
 	}
 }
